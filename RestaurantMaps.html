@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+    <head>
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+        <style>
+            #mapArea {
+                height: 650px;
+                width: 100%;
+            }
+            #floating-panel {
+                position: absolute;
+                top: 15px;
+                right: 4%;
+				width: 200px;
+                z-index: 5;
+                background-color: #fff;
+                padding: 5px;
+                border: 1px solid #999;
+				border-radius: 5px;
+				webkit-border-radius: 5;
+				-moz-border-radius: 5;
+                text-align: center;
+                font-family: 'Roboto','sans-serif';
+                line-height: 30px;
+                padding-left: 10px;
+            }
+			
+			button {
+				-webkit-border-radius: 5;
+				-moz-border-radius: 5;
+				border-radius: 5px;
+				font-family: Arial;
+				color: #ffffff;
+				font-size: 9px;
+				background: #0994f0;
+				text-decoration: none;
+				padding: 5px 10px 5px 10px;
+			}
+
+			button:hover {
+				background: #009dff;
+				text-decoration: none;
+			}
+			
+        </style>
+    </head>
+    <body>
+        <div id="floating-panel">
+            Restaurant Locator and How to Get There
+        </div>
+        <div id="mapArea"></div>        
+        <script defer
+            src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDOFq16RGyHL50ZQ-KzKHQq4MKBDT_dWKw&libraries=places&callback=initialize">
+        </script>
+        <script>
+            var pointOfReference = {};		
+			
+			//this will be our map object
+            var map;
+			
+			//these will be our references for the Google Maps libraries and services
+            var geocoder;
+            var placesService;
+            var directionService; 
+            var directionDisplay;
+			var infowindow;
+						
+			//this will contain the collected list of restaurants
+            var restaurants = [];
+			
+			/**
+			Let us initialize the map object and the service references
+			**/
+            function initialize(){
+				
+                directionService = new google.maps.DirectionsService;
+                directionDisplay = new google.maps.DirectionsRenderer;
+                geocoder = new google.maps.Geocoder();
+                infowindow = new google.maps.InfoWindow();
+                
+				//place map object on our 'mapArea' div
+                map = new google.maps.Map(document.getElementById("mapArea"), {});    
+				//add an event for our map whenever there are changes in panning, zoom, or center change
+                map.addListener('idle', function() {
+											window.setTimeout(function() { 
+																	pointOfReference = {
+																		lat: map.getCenter().lat(),
+																		lng: map.getCenter().lng()
+																		};                                                                            
+																	//collect restaurants every time user drags the map and new center is nominated                                                             
+																	collectRestaurants();
+																}, 
+															500); //it is necessary to give a little delay as fetching results may take a while
+										});
+										
+				//let us initialize these library and service references	
+				//we put this after initializing the map object, as the initialization for these 
+				//library and service feeds on the map object
+                placesService = new google.maps.places.PlacesService(map);
+                directionDisplay.setMap(map);
+				
+				//initially get sample coordinate as basis for location
+				//once we got the coordinate of the location, the 'pointOfReference' will be changed
+				//then we invoke map.seCenter() which will change the center of the map
+				//once the map object detects changes in the map, the 'idle' event will be triggered
+				//we set the function for the 'idle' event of the map which is to fetch all the restaurants.
+                geocoder.geocode({componentRestrictions:{ country: 'PH', locality: 'CEBU CITY'}}, 
+                                        function(results, status) {
+                                            if (status == 'OK') { 
+                                                pointOfReference = {
+                                                                        lat: results[0].geometry.location.lat(),
+                                                                        lng: results[0].geometry.location.lng()
+                                                                        }
+                                                map.setCenter(results[0].geometry.location);
+                                                map.setZoom(15);
+                                            // collectRestaurants();  //let the map 'idle' event handle the fetching now
+                                            } else {
+                                                alert('Geocode was not successful for the following reason: ' + status);
+                                            }
+                                        }); 
+            }
+			
+			function collectRestaurants(){    
+                //only 1 type may be specified according to the documentation
+                //got to check the keyword which also checks the place's name, address, type and customer reviews
+                var request = {
+                                    location: pointOfReference,
+									//when choosing distance for rank by, you cannot set a radius value
+                                    //radius: 5000, //5 KM radius									
+                                    rankBy: google.maps.places.RankBy.DISTANCE, 
+                                    //a search term to be matched to the registered locations in maps' DB
+									keyword: 'restaurant'									
+                                };
+                //let's put a gap between queries to minimize over query limit
+				//currently maps returns 20 results at a time.
+				//we still have to implement pagination. #TO-DO
+                placesService.nearbySearch(request, callback);               
+            }
+            function callback(results, status) {
+                if (status == google.maps.places.PlacesServiceStatus.OK) {
+                    for (var i = 0; i < results.length; i++) {
+                        var place = results[i]; 
+						//check if the restaurant is already fetched from the previous results within the radius of location
+						//our main criteria here is to check if the name of the shop has 'restaurant' or if the type has 'restaurant'
+						//we have to double check because there are times google returns something unusual.
+                        if((restaurants.length < 1 || !isPlaceAlreadyCollected(place.place_id)) && placeIsALegitResto(place))  {
+                            restaurants.push(place.place_id);
+                            createLocationPinMarker(place);
+                        }
+                    }
+                }else{
+					console.log("Location Search not successful "+ status.toString());
+				}
+            }
+            function isPlaceAlreadyCollected(placeId){
+                for(var i = 0; i< restaurants.length; i++){
+                    if(restaurants[i] == placeId){
+                        return true;
+                    }
+                }
+                return false;
+            }
+            function placeIsALegitResto(place){
+                if(place != null && place != undefined){
+                    var name = place.name;
+                    var type = place.types;
+
+                    if(hasMatchedRestaurantWord(name)){
+                        return true;
+                    }
+                    if(listedAsRestaurant(type)){
+                        return true;
+                    }
+                }
+                return false;
+            }
+            function hasMatchedRestaurantWord(value){
+                if(value != null && value != undefined && value !=="" && value.toLowerCase().includes('restaurant')){
+                    return true;
+                }
+                return false;
+            }
+            function listedAsRestaurant(typeList){
+                if(typeList != null && typeList != undefined && typeList.length > 0){
+                    for(var i=0; i< typeList.length; i++){
+                        if(hasMatchedRestaurantWord(typeList[i])){
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+            
+			//creation of pinMarker for a place
+			//feed this with place object
+			function createLocationPinMarker(place) {
+                var name = place.name;
+                var id = place.place_id;
+				
+                //for more details like formatted address, contact num and etc.
+                placesService.getDetails({placeId: id}, function(place, status) {                         
+											if (status === google.maps.places.PlacesServiceStatus.OK) { 
+												var marker = new google.maps.Marker({
+																				map: map,
+																				//we can actually add animations
+																				//animation: google.maps.Animation.DROP, 
+																				position: place.geometry.location
+																			});
+												google.maps.event.addListener(marker, 'click', function() {
+															var name = place.name;
+															var rating = (place.rating != null && place.rating > 0) ? place.rating : 'N/A';
+															var contact = (place.formatted_phone_number) ? place.formatted_phone_number : 'N/A';
+															var website = (place.website) ? '<a href=' + place.website + '>' +place.website +'</a>' : 'N/A';
+															var directParam = place.geometry.location.lat()+','+ place.geometry.location.lng();
+																														
+															infowindow.setContent('<div class="infoWindow"><strong>' + name + '</strong><br>' +
+																place.formatted_address + '<br>' +
+																'Rating: ' + rating + '<br>' +
+																'Contact: ' + contact + '<br>' +
+																'Website: '+ website +' <br/>' +
+																'<button onclick="getDirections('+ directParam +')">Get Directions</button></div>');
+															infowindow.open(map, this);
+														});
+											}else {console.log('Query '+ status+ ' for '+ id);}
+									});
+            }  
+			
+			
+            function getDirections(lat, lng){
+				//assign the coordinates of the restaurant
+                var destination = {lat: lat, lng: lng}; 
+                if(navigator.geolocation){ //check if browser supports geolocation
+                    navigator.geolocation.getCurrentPosition( //function accepts callback functions for success and fail and
+                        function(position){ //browser returns position object see documentation in developer.mozilla.org
+                            var currentPos = {lat: position.coords.latitude,
+                                              lng: position.coords.longitude}
+                            infowindow.setPosition(currentPos);
+                            infowindow.setContent('You are here.');
+                            infowindow.open(map);                                                                    
+                            map.setCenter(currentPos);
+                            traceDirection(currentPos, destination);
+                        },
+                        function(){
+                            handleLocationError(true, infoWindow, map.getCenter());
+                        }
+                    );
+                }else{
+                    handleLocationError(false, infoWindow, map.getCenter());
+                }
+            }  
+            function handleLocationError(browserHasGeolocation, infoWindow, pos) {
+                infoWindow.setPosition(pos);
+                infoWindow.setContent(browserHasGeolocation ?
+                                    'Error: The Geolocation service failed.' :
+                                    'Error: Your browser doesn\'t support geolocation.');
+                infoWindow.open(map);
+            }   
+            function traceDirection(origin, destination){
+                if(directionService === null){
+                    directionService = new google.maps.DirectionsService;
+                }
+                if(directionDisplay === null){
+                    directionDisplay = new google.maps.DirectionsRenderer;
+                    directionDisplay.setMap(map);
+                }
+                directionService.route(
+                    {
+                        origin: origin,
+                        destination: destination,
+						//provideRouteAlternatives: true, this option is still to be experimented
+						//we can actually change the modes here
+						//DRIVING as default. We can opt for BIKING, TRANSIT, WALKING
+                        travelMode: 'TRANSIT',
+						//when choosing transit, we can actually add more options
+						transitOptions: {
+											modes: ['BUS'], // we can actually add more like RAIL, SUBWAY, TRAIL, TRAM
+											routingPreference: 'LESS_WALKING' // or FEWER_TRANSFERS
+										}
+                    },
+                    function(response, status){
+                        if(status === 'OK'){
+                            directionDisplay.setDirections(response);
+                        }else{
+                            alert('Direction request failed: '+status);
+                        }
+                    }
+                );
+            }
+        </script>        
+    </body>
+</html>
